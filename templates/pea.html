@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="th"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>PEA Upload</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"></head>
+<body>
+<header class="topbar">
+    <div><h1>PEA Bill Reader</h1><p>อัปโหลดบิล PEA เพื่อแปลงเป็น Excel FV60 ตามเทมเพลตจริง</p></div>
+    <div class="topbar-actions"><a href="{{ url_for('dashboard') }}" class="btn">Dashboard</a><a href="{{ url_for('logout') }}" class="btn btn-danger">Logout</a></div>
+</header>
+<main class="container">
+    <section class="card">
+        <h2>อัปโหลดไฟล์ PEA</h2>
+        <form id="uploadForm" data-bill-type="pea">
+            <input type="file" name="files" id="files" accept=".pdf" multiple required>
+            <button type="submit" class="btn btn-primary">เริ่มประมวลผล</button>
+        </form>
+        <div id="result" class="result-box hidden"></div>
+    </section>
+</main>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body></html>

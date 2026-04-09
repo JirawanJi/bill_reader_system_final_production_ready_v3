@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual Environment
+.venv/
+env/
+
+# VS
+.vs/
+.vscode/
+
+# Database
+*.db
+
+# Upload/Export
+uploads/
+exports/
+
+# OS
+desktop.ini
+.DS_Store

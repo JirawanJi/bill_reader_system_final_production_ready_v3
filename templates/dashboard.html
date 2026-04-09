@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Bill Reader</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+    <div>
+        <h1>Bill Reader Dashboard</h1>
+        <p>ยินดีต้อนรับ, {{ username }}</p>
+    </div>
+    <div class="topbar-actions">
+        <a href="{{ url_for('pea_page') }}" class="btn btn-primary">PEA</a>
+        <a href="{{ url_for('mea_page') }}" class="btn btn-warning">MEA</a>
+        <a href="{{ url_for('logout') }}" class="btn btn-danger">Logout</a>
+    </div>
+</header>
+
+<main class="container">
+<section class="card">
+    <h2>เมนูหลัก</h2>
+    <div class="menu-grid">
+        <a class="menu-box pea-box" href="{{ url_for('pea_page') }}">
+            <h3>อัปโหลดบิล PEA</h3>
+            <p>Export ตรงเทมเพลต FV60 จริง</p>
+        </a>
+        <a class="menu-box mea-box" href="{{ url_for('mea_page') }}">
+            <h3>อัปโหลดบิล MEA</h3>
+            <p>Export เวอร์ชันมาตรฐาน</p>
+        </a>
+    </div>
+</section>
+
+<section class="card">
+    <h2>ประวัติการประมวลผลล่าสุด</h2>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>วันเวลา</th>
+                    <th>ประเภท</th>
+                    <th>จำนวนไฟล์</th>
+                    <th>สำเร็จ</th>
+                    <th>ไม่สำเร็จ</th>
+                    <th>ไฟล์ส่งออก</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in histories %}
+                <tr>
+                    <td>{{ item.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td>{{ item.bill_type }}</td>
+                    <td>{{ item.total_files }}</td>
+                    <td>{{ item.success_files }}</td>
+                    <td>{{ item.failed_files }}</td>
+                    <td>{% if item.export_file %}<a href="{{ url_for('download_export', filename=item.export_file) }}">{{ item.export_file }}</a>{% else %}-{% endif %}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="center">ยังไม่มีประวัติการใช้งาน</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+</main>
+</body>
+</html>

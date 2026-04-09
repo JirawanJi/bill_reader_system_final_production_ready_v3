@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Bill Reader</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-body">
+    <div class="login-container">
+        <div class="login-card">
+            <h1>PEA + MEA Bill Reader</h1>
+            <p class="subtitle">เข้าสู่ระบบเพื่อใช้งานระบบอ่านบิลไฟฟ้า</p>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    <div class="flash-wrap">
+                        {% for category, message in messages %}
+                            <div class="flash {{ category }}">{{ message }}</div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
+
+            <form method="POST" class="login-form">
+                <label>Username</label>
+                <input type="text" name="username" placeholder="กรอก username" required>
+                <label>Password</label>
+                <input type="password" name="password" placeholder="กรอกรหัสผ่าน" required>
+                <button type="submit" class="btn btn-primary full">เข้าสู่ระบบ</button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>

@@ -3,6 +3,9 @@ import re
 from datetime import datetime, date, timedelta
 
 import pdfplumber
+import fitz
+import pytesseract
+from PIL import Image
 
 
 def extract_text_from_pdf(filepath: str) -> str:
@@ -13,6 +16,26 @@ def extract_text_from_pdf(filepath: str) -> str:
                 page_text = page.extract_text() or ""
                 if page_text.strip():
                     texts.append(page_text)
+    except Exception:
+        pass
+
+    try:
+        doc = fitz.open(filepath)
+        for page in doc:
+            page_text = page.get_text("text") or ""
+            if page_text.strip():
+                texts.append(page_text)
+
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            try:
+                ocr_text = pytesseract.image_to_string(
+                    img, lang="tha+eng", config="--psm 6"
+                )
+            except Exception:
+                ocr_text = pytesseract.image_to_string(img)
+            if ocr_text.strip():
+                texts.append(ocr_text)
     except Exception:
         pass
     return "\n".join(texts)
@@ -29,12 +52,27 @@ def find_first(patterns, text, default=""):
 def normalize_amount(value: str) -> float:
     if not value:
         return 0.0
-    cleaned = value.replace(",", "").replace(" ", "")
+    cleaned = normalize_ocr_digits(value).replace(",", "").replace(" ", "")
     cleaned = re.sub(r"[^\d.]", "", cleaned)
     try:
         return float(cleaned)
     except ValueError:
         return 0.0
+
+
+def normalize_ocr_digits(text: str) -> str:
+    if not text:
+        return ""
+    # Thai digits + common OCR confusions
+    table = str.maketrans({
+        "๐": "0", "๑": "1", "๒": "2", "๓": "3", "๔": "4",
+        "๕": "5", "๖": "6", "๗": "7", "๘": "8", "๙": "9",
+        "O": "0", "o": "0", "D": "0", "Q": "0",
+        "I": "1", "l": "1", "|": "1",
+        "S": "5", "s": "5",
+        "B": "8",
+    })
+    return text.translate(table)
 
 
 def convert_thai_year(date_str: str) -> str:
@@ -78,7 +116,7 @@ def convert_thai_text_date(date_str: str) -> str:
         "ธันวาคม": 12,
     }
 
-    m = re.match(r"^\s*(\d{1,2})\s+([ก-๙]+)\s+(\d{4})\s*$", date_str)
+    m = re.match(r"^\s*(\d{1,2})\s*([ก-๙]+)\s*(\d{4})\s*$", date_str)
     if not m:
         return ""
 
@@ -180,7 +218,7 @@ def derive_bill_month_year_from_text(text: str, fallback_date: str = "") -> str:
 
 
 def extract_pea_invoice(text: str) -> str:
-    return find_first(
+    invoice = find_first(
         [
             r"Invoice\s*no\.?\s*([0-9]+)",
             r"เลขที่ใบแจ้งค่าไฟฟ้า\s*([0-9]+)",
@@ -191,29 +229,97 @@ def extract_pea_invoice(text: str) -> str:
         text,
         default="",
     )
+    invoice = normalize_ocr_digits(invoice)
+    invoice = re.sub(r"\D", "", invoice)
+    return invoice
 
 
 def extract_pea_amount(text: str) -> str:
-    return find_first(
-        [
-            r"Grand\s*Total.*?([\d,]+\.\d{2})",
-            r"รวมเงินทั้งสิ้น.*?([\d,]+\.\d{2})",
-            r"รวมเงินค่าไฟฟ้าเดือนปัจจุบัน.*?([\d,]+\.\d{2})",
-            r"Total\s*[\(\w\s\)]*.*?([\d,]+\.\d{2})",
-        ],
-        text,
-        default="0.00",
-    )
+    normalized_text = normalize_ocr_digits(text)
+    amount_pattern = r"(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2}"
+    lines = [ln.strip() for ln in normalized_text.splitlines() if ln.strip()]
+
+    def parse_amount_token(token: str) -> float:
+        token = normalize_ocr_digits(token)
+        token = re.sub(r"[^\d.,]", "", token)
+        if not token:
+            return 0.0
+        # Fix malformed OCR token like ".99.013.05" -> "99013.05"
+        if token.count(".") >= 2:
+            last_dot = token.rfind(".")
+            int_part = re.sub(r"\D", "", token[:last_dot])
+            dec_part = re.sub(r"\D", "", token[last_dot + 1:])
+            if int_part and len(dec_part) >= 2:
+                token = f"{int_part}.{dec_part[:2]}"
+        else:
+            token = token.replace(",", "")
+        return normalize_amount(token)
+
+    def line_amounts(line: str):
+        amounts = [parse_amount_token(x) for x in re.findall(amount_pattern, line)]
+        # include malformed dotted values that standard pattern splits incorrectly
+        malformed_tokens = re.findall(r"[.,]?\d[\d.,]*\.\d{2}", line)
+        amounts.extend(parse_amount_token(x) for x in malformed_tokens)
+        return [x for x in amounts if x > 0]
+
+    current_month = []
+    total_lines = []
+
+    for line in lines:
+        line_l = line.lower()
+        amounts = line_amounts(line)
+        if not amounts:
+            continue
+
+        # Most reliable: current-month total line (allow OCR distortion)
+        if ("รวมเงิน" in line and ("เดือนปัจจุบ" in line or "เดือนบัจจุบ" in line)):
+            current_month.extend(amounts)
+            continue
+
+        # Other total-like lines
+        if (
+            "grand total" in line_l
+            or "รวมเงินทั้งสิ้น" in line
+            or "รวมเงินค่าไฟฟ้า" in line
+            or "sub total" in line_l
+            or "total" in line_l
+        ):
+            total_lines.extend(amounts)
+
+    if current_month:
+        # Prefer realistic cap (OCR can prepend one extra digit)
+        realistic = [x for x in current_month if x <= 300000]
+        return f"{(max(realistic) if realistic else max(current_month)):,.2f}"
+
+    if total_lines:
+        realistic = [x for x in total_lines if x <= 300000]
+        pick = max(realistic) if realistic else max(total_lines)
+        # If still suspiciously tiny, try global max as fallback
+        if pick < 500:
+            all_amounts = [normalize_amount(x) for x in re.findall(amount_pattern, normalized_text) if normalize_amount(x) > 0]
+            if all_amounts:
+                realistic_all = [x for x in all_amounts if x <= 300000]
+                pick = max(realistic_all) if realistic_all else max(all_amounts)
+        return f"{pick:,.2f}"
+
+    # 3) global monetary fallback
+    all_amounts = [normalize_amount(x) for x in re.findall(amount_pattern, normalized_text) if normalize_amount(x) > 0]
+    if all_amounts:
+        realistic = [x for x in all_amounts if x <= 300000]
+        return f"{(max(realistic) if realistic else max(all_amounts)):,.2f}"
+
+    return "0.00"
 
 
 def extract_pea_meter_reading_date(text: str, invoice: str = "") -> str:
+    normalized_text = normalize_ocr_digits(text)
     # 1) แบบมี keyword
     date_raw = find_first(
         [
             r"Meter\s*Reading\s*Date\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})",
             r"วันที่อ่านหน่วย\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})",
         ],
-        text,
+        normalized_text,
         default="",
     )
     if date_raw:
@@ -225,7 +331,7 @@ def extract_pea_meter_reading_date(text: str, invoice: str = "") -> str:
             r"\b\d{4}\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})\s+\d{2}/\d{4}\b",
             r"\b\d{4}\s+([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})\s+\d{2}/\d{2}\b",
         ],
-        text,
+        normalized_text,
         default="",
     )
     if date_raw:
@@ -237,7 +343,7 @@ def extract_pea_meter_reading_date(text: str, invoice: str = "") -> str:
             [
                 rf"{re.escape(invoice)}.*?([0-9]{{1,2}}/[0-9]{{1,2}}/[0-9]{{2,4}})"
             ],
-            text,
+            normalized_text,
             default="",
         )
         if date_raw:
@@ -247,22 +353,26 @@ def extract_pea_meter_reading_date(text: str, invoice: str = "") -> str:
 
 
 def extract_pea_document_date(text: str) -> str:
+    normalized_text = normalize_ocr_digits(text)
     return find_first(
         [
             r"Document\s*Date\s*:\s*([0-9\/]+)",
+            r"Date\s*:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})",
         ],
-        text,
+        normalized_text,
         default="",
     )
 
 
 def extract_pea_due_date(text: str) -> str:
+    normalized_text = normalize_ocr_digits(text)
     return find_first(
         [
             r"Due\s*Date\s*([0-9]{1,2}\s+[^\s]+\s+[0-9]{4})",
             r"วันที่ครบกำหนดค่าไฟฟ้าเดือนปัจจุบัน.*?([0-9]{1,2}\s+[^\s]+\s+[0-9]{4})",
+            r"วันที่ครบกําหนดค่าไฟฟ้าเดือนปัจจุบัน.*?([0-9]{1,2}\s*[^\s]+\s*[0-9]{4})",
         ],
-        text,
+        normalized_text,
         default="",
     )
 
@@ -276,14 +386,7 @@ def fourth_thursday_of_month(dt: date) -> date:
 
 
 def build_pea_baseline_date(store_id: str, due_date_text: str, invoice_date: str) -> str:
-    # rule พิเศษร้าน 01266
-    if store_id == "01266":
-        dt = parse_ddmmyyyy(invoice_date)
-        if dt:
-            th4 = fourth_thursday_of_month(dt.date())
-            return th4.strftime("%d.%m.%Y")
-        return ""
-
+    # ใช้ due_date เหมือนกันทุก store (รวมถึง 01266)
     return convert_thai_text_date(due_date_text)
 
 
